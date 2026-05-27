@@ -10,7 +10,7 @@ on:
       burst_size:
         description: "Number of requests to fire in a single burst"
         required: true
-        default: "200"
+        default: "1500"
       sleep_between_bursts:
         description: "Sleep duration between bursts (in seconds)"
         required: true
@@ -86,13 +86,7 @@ jobs:
           # ⚠️ PASTE YOUR TOP 50 IMAGE URLS HERE ⚠️
           IMAGE_URLS = [
               "https://media.moctale.in/images/1c8c57dc-fdf8-4d15-9004-ad5e44087079.jpg",
-              "https://media.moctale.in/images/35c3b9fe-a40f-4935-a3df-752c7918e215.jpg",
-              "https://media.moctale.in/images/91f21ad9-64ee-4dae-b9f2-caa3a34047dd.jpg",
-              "https://media.moctale.in/images/5d2241f4-4360-40af-9b92-f99193d22d6c.jpg",
-              "https://media.moctale.in/images/dd5bfdae-9123-432c-8ee1-01dec3dfd60f.jpg",
-              "https://media.moctale.in/images/122c3a0c-af58-4528-8f63-b179e9c08f60.jpg",
-              "https://media.moctale.in/images/289567a5-926c-4ed2-b0be-a0a05f26b06f.jpg",
-              "https://media.moctale.in/images/d21dbbf0-7b52-470f-ae67-5eea678a82ac.jpg"
+              "https://media.moctale.in/images/35c3b9fe-a40f-4935-a3df-752c7918e215.jpg"
           ]
 
           async def fetch_image(url: str, semaphore: asyncio.Semaphore, abort_event: asyncio.Event, use_warp: bool):
