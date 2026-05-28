@@ -85,8 +85,12 @@ jobs:
 
           # ⚠️ PASTE YOUR TOP 50 IMAGE URLS HERE ⚠️
           IMAGE_URLS = [
-              "https://media.moctale.in/images/1c8c57dc-fdf8-4d15-9004-ad5e44087079.jpg",
-              "https://media.moctale.in/images/35c3b9fe-a40f-4935-a3df-752c7918e215.jpg"
+              "https://media.moctale.in/images/daeb163f-9938-43e8-b0d3-8e4c8b465767.jpg",
+              "https://media.moctale.in/images/c2040913-e307-4ac4-aada-eba8329b8320.jpg",
+              "https://media.moctale.in/images/3fe14723-fe15-45cc-ba21-27378e1afaa5.jpg",
+              "https://media.moctale.in/images/79ebbc3a-008a-4759-9ced-94acddb415ec.jpg",
+              "https://media.moctale.in/images/6862665a-66b9-410c-87bc-ceb7a78bc6d5.jpg",
+              "https://media.moctale.in/images/86ca87b2-31c5-46bf-938d-2652f3adddde.jpg"
           ]
 
           async def fetch_image(url: str, semaphore: asyncio.Semaphore, abort_event: asyncio.Event, use_warp: bool):
