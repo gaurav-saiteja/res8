@@ -1,218 +1,159 @@
-name: Image CDN Load Tester
+name: safe and warranted, consented Load Test
 
+# Triggers the workflow manually from the GitHub Actions UI
 on:
   workflow_dispatch:
-    inputs:
-      total_requests:
-        description: "Total number of requests to make"
-        required: true
-        default: "5000"
-      burst_size:
-        description: "Number of requests to fire in a single burst"
-        required: true
-        default: "1500"
-      sleep_between_bursts:
-        description: "Sleep duration between bursts (in seconds)"
-        required: true
-        default: "0"
-      max_concurrent_streams:
-        description: "Max concurrent streams executing simultaneously within a burst"
-        required: true
-        default: "200"
 
 jobs:
-  execute-load-test:
+  run-load-test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🌐 Install & Configure Cloudflare WARP (Proxy Mode)
-        run: |
-          # Add Cloudflare's official GPG key and APT repository
-          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
-          
-          sudo apt-get update
-          sudo apt-get install -y cloudflare-warp
-          
-          # Wait for the warp-svc daemon to initialize
-          sleep 3
-          
-          # Register an anonymous device, set to Proxy mode, and connect
-          warp-cli --accept-tos registration new
-          warp-cli --accept-tos mode proxy
-          warp-cli --accept-tos connect
-          
-          # Wait for the secure tunnel to establish itself
-          sleep 5
-          warp-cli --accept-tos status
-
-      - name: 🐍 Set up Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: '3.11'
 
-      - name: 📦 Install HTTP/2 & SOCKS Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          # We must install the [socks] extension alongside [http2] to route traffic through WARP
-          pip install "httpx[http2,socks]==0.27.0"
+      - name: Install Dependencies
+        run: pip install aiohttp tqdm
 
-      - name: 🔨 Generate & Run Load Tester
-        env:
-          TOTAL_REQUESTS: ${{ github.event.inputs.total_requests }}
-          BURST_SIZE: ${{ github.event.inputs.burst_size }}
-          SLEEP_BETWEEN_BURSTS: ${{ github.event.inputs.sleep_between_bursts }}
-          MAX_CONCURRENT_STREAMS: ${{ github.event.inputs.max_concurrent_streams }}
-          PYTHONUNBUFFERED: "1" 
+      - name: Execute Embedded Python Script
         run: |
-          cat << 'EOF' > load_tester.py
+          python - << 'EOF'
           import asyncio
-          import httpx
-          import random
-          import time
+          import aiohttp
           import os
+          import logging
+          from tqdm.asyncio import tqdm
+          from asyncio import Semaphore
 
-          # ---------------------------------------------------------
-          # ⚙️ CONFIGURATION
-          # ---------------------------------------------------------
-          TOTAL_REQUESTS = int(os.environ.get("TOTAL_REQUESTS", 5000))
-          BURST_SIZE = int(os.environ.get("BURST_SIZE", 100))
-          SLEEP_BETWEEN_BURSTS = float(os.environ.get("SLEEP_BETWEEN_BURSTS", 30.0))
-          MAX_CONCURRENT_STREAMS = int(os.environ.get("MAX_CONCURRENT_STREAMS", 50))
-          
-          # Circuit Breaker Cooldown Duration
-          COOLDOWN_DURATION = 10.0
-
-          # ⚠️ PASTE YOUR TOP 50 IMAGE URLS HERE ⚠️
-          IMAGE_URLS = [
-              "https://media.moctale.in/images/daeb163f-9938-43e8-b0d3-8e4c8b465767.jpg",
-              "https://media.moctale.in/images/c2040913-e307-4ac4-aada-eba8329b8320.jpg",
-              "https://media.moctale.in/images/3fe14723-fe15-45cc-ba21-27378e1afaa5.jpg",
-              "https://media.moctale.in/images/79ebbc3a-008a-4759-9ced-94acddb415ec.jpg",
-              "https://media.moctale.in/images/6862665a-66b9-410c-87bc-ceb7a78bc6d5.jpg",
-              "https://media.moctale.in/images/86ca87b2-31c5-46bf-938d-2652f3adddde.jpg"
+          # ---------------- CONFIGURATION ---------------- #
+          URLS = [
+              "https://dm2m3fxlnuun4.cloudfront.net/Telugu/Movie+pics/Gam+Gam+Ganesha+Poster.jpg",
+              "https://dm2m3fxlnuun4.cloudfront.net/Telugu/Movie+pics/Pottel+Poster.jpg",
+              "https://dm2m3fxlnuun4.cloudfront.net/English+/Movie+Poster/se7en+Poster.jpeg",
+              "https://dm2m3fxlnuun4.cloudfront.net/English+/Movie+Poster/Paddington+Poster.jpg"
           ]
 
-          async def fetch_image(url: str, semaphore: asyncio.Semaphore, abort_event: asyncio.Event, use_warp: bool):
-              """Executes HTTP/2 request. Uses WARP SOCKS5 proxy if use_warp is True."""
-              try:
-                  async with semaphore:
-                      if abort_event.is_set():
-                          return 0
-                      
-                      random_q = f"{random.uniform(0.1, 99.0):.6f}"
-                      headers = {
-                          "Host": "media.moctale.in",
-                          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-                          "Accept": f"image/png;q={random_q}",
-                          "Sec-Fetch-Site": "same-site",
-                          "Sec-Fetch-Mode": "no-cors",
-                          "Sec-Fetch-Dest": "image",
-                          "Referer": "https://moctale.in/",
-                          "Priority": "0",
-                          "Cache-Control": "no-cache",
-                          "Pragma": "no-cache"
-                      }
-
-                      # Dynamically assign the proxy based on current state
-                      proxy_url = "socks5://127.0.0.1:40000" if use_warp else None
-                      tag = "[WARP]" if use_warp else "[AZURE]"
-
-                      async with httpx.AsyncClient(http2=True, proxy=proxy_url, timeout=15.0) as client:
-                          response = await client.get(url, headers=headers)
-                          x_cache = response.headers.get("x-cache", "No-Cache-Header")
-                          status_code = response.status_code
-                          
-                          if status_code == 200:
-                              print(f"{tag} [{x_cache}] [{status_code}] [{url}]", flush=True)
-                              return 1
-                          else:
-                              print(f"❌ {tag} [ERROR] [{x_cache}] [HTTP {status_code}] [{url}] -> Response: {response.text[:100]}", flush=True)
-                              # 🚨 TRIP THE CIRCUIT BREAKER
-                              abort_event.set()
-                              return 0
-
-              except asyncio.CancelledError:
-                  return 0
-              except Exception as e:
-                  tag = "[WARP]" if use_warp else "[AZURE]"
-                  print(f"⚠️ {tag} [NETWORK ERROR] [000] [{url}] -> {str(e)}", flush=True)
-                  abort_event.set()
-                  return 0
+          # --- Load Test Parameters ---
+          CONCURRENCY_LIMIT = 500  # Max number of concurrent requests
+          REQUESTS_PER_BATCH = 1000 # Number of requests to launch each second
+          NUM_BATCHES = 35 # Number of batches to run
+          BATCH_DELAY_SECONDS = 1 # Delay between each batch
+          TOTAL_REQUESTS = REQUESTS_PER_BATCH * NUM_BATCHES
 
 
-          async def execute_burst(burst_size: int, semaphore: asyncio.Semaphore, use_warp: bool):
-              abort_event = asyncio.Event()
-              
-              tasks = [
-                  asyncio.create_task(fetch_image(random.choice(IMAGE_URLS), semaphore, abort_event, use_warp)) 
-                  for _ in range(burst_size)
-              ]
-              
-              async def monitor():
-                  await abort_event.wait()
-                  for t in tasks:
-                      if not t.done():
-                          t.cancel()
-                          
-              monitor_task = asyncio.create_task(monitor())
-              results = await asyncio.gather(*tasks, return_exceptions=True)
-              
-              if not monitor_task.done():
-                  monitor_task.cancel()
-                  
-              success_count = sum(1 for r in results if r == 1)
-              return success_count, abort_event.is_set()
+          HEADERS = {
+              "Host": "dm2m3fxlnuun4.cloudfront.net",
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+              "Accept": "image/avif,image/webp,image/apng,image/svg+xml;",
+              "Sec-Fetch-Site": "cross-site",
+              "Sec-Fetch-Mode": "no-cors",
+              "Sec-Fetch-Dest": "image",
+              "Referer": "https://knitt.app/",
+              "Priority": "0",
+              "Cache-Control": "no-cache",
+              "Pragma": "no-cache"
+          }
 
+          # ---------------- LOGGING SETUP ---------------- #
+          logging.basicConfig(
+              level=logging.INFO,
+              format='%(asctime)s - %(levelname)s - %(message)s'
+          )
 
+          # ---------------- WORKER FUNCTION ---------------- #
+          async def fetch_url(url, session, semaphore):
+              # Wait for a free slot from the semaphore
+              async with semaphore:
+                  try:
+                      async with session.get(url, headers=HEADERS) as response:
+                          await response.read()
+                          if response.status != 200:
+                              logging.warning(f"URL: {url} - Received status code: {response.status}")
+                          return response.status
+                  except aiohttp.ClientConnectorError as e:
+                      logging.error(f"URL: {url} - Connection Error: {e}")
+                      return None
+                  except asyncio.TimeoutError:
+                      logging.error(f"URL: {url} - Request timed out.")
+                      return None
+                  except Exception as e:
+                      logging.error(f"URL: {url} - An unexpected error occurred: {e}", exc_info=True)
+                      return None
+
+          # ---------------- MAIN EXECUTOR ---------------- #
           async def main():
-              if not IMAGE_URLS or IMAGE_URLS[0] == "":
-                  print("❌ Error: Please add URLs to the IMAGE_URLS list in the YAML file.", flush=True)
-                  return
+              print("Starting aggressive load test with concurrency limiting and ramp-up...")
+              print(f"Configuration: {CONCURRENCY_LIMIT} concurrent requests, ramping up {REQUESTS_PER_BATCH} reqs/{BATCH_DELAY_SECONDS}s.")
 
-              print(f"🚀 Starting Shape-Shifter Load Test: {TOTAL_REQUESTS} total attempts.", flush=True)
-              print(f"⚙️ Config: Bursts of {BURST_SIZE} | {MAX_CONCURRENT_STREAMS} max concurrent | {SLEEP_BETWEEN_BURSTS}s sleep", flush=True)
-              print("-" * 80, flush=True)
+              connector = aiohttp.TCPConnector(
+                  limit=0, # Let the semaphore handle connection limiting
+                  limit_per_host=0,
+                  ttl_dns_cache=300,
+                  ssl=False,
+                  force_close=False,
+                  enable_cleanup_closed=True
+              )
 
-              semaphore = asyncio.Semaphore(MAX_CONCURRENT_STREAMS)
-              tasks_remaining = TOTAL_REQUESTS
-              burst_num = 1
+              timeout = aiohttp.ClientTimeout(
+                  total=60, # Increased timeout for potential delays under load
+                  connect=10,
+                  sock_connect=10,
+                  sock_read=30
+              )
+
+              semaphore = Semaphore(CONCURRENCY_LIMIT)
+              all_tasks = []
+
+              async with aiohttp.ClientSession(
+                  connector=connector,
+                  timeout=timeout
+              ) as session:
+
+                  # Gradual Ramp-Up Loop
+                  for i in range(NUM_BATCHES):
+                      logging.info(f"Ramping up: Launching batch {i + 1}/{NUM_BATCHES}...")
+                      
+                      batch_tasks = [
+                          asyncio.create_task(
+                              fetch_url(
+                                  URLS[j % len(URLS)],
+                                  session,
+                                  semaphore
+                              )
+                          )
+                          for j in range(REQUESTS_PER_BATCH)
+                      ]
+                      all_tasks.extend(batch_tasks)
+                      
+                      if i < NUM_BATCHES - 1:
+                          await asyncio.sleep(BATCH_DELAY_SECONDS)
+
+                  logging.info("All tasks have been launched. Waiting for them to complete.")
+                  
+                  # Wait for all tasks to complete with a progress bar
+                  results = await tqdm.gather(*all_tasks, desc="Running Load Test")
+
+              # Analysis of results
+              success_count = sum(1 for status in results if status == 200)
+              failed_count = sum(1 for status in results if status is None)
               
-              # Initial Identity State
-              use_warp = False
-
-              while tasks_remaining > 0:
-                  current_burst = min(BURST_SIZE, tasks_remaining)
-                  identity_label = "WARP Cloudflare IP" if use_warp else "Raw Azure IP"
-                  
-                  print(f"\n⚡ Initiating Burst #{burst_num} | Identity: {identity_label} | ({current_burst} requests)...", flush=True)
-                  
-                  success_count, is_tripped = await execute_burst(current_burst, semaphore, use_warp)
-                  tasks_remaining -= current_burst
-                  
-                  if is_tripped:
-                      print(f"\n🛑 [CIRCUIT BREAKER TRIPPED] Server struggled or blocked the IP!", flush=True)
-                      print(f"🛑 {success_count}/{current_burst} requests succeeded before abort.", flush=True)
-                      
-                      # Toggle Identity for the next burst
-                      use_warp = not use_warp
-                      next_identity_label = "WARP Cloudflare IP" if use_warp else "Raw Azure IP"
-                      
-                      print(f"🔄 SHAPE-SHIFTING: Switching identity to -> {next_identity_label}", flush=True)
-                      print(f"⏳ Backing off for exactly {COOLDOWN_DURATION} seconds before resuming test...", flush=True)
-                      await asyncio.sleep(COOLDOWN_DURATION)
-                  else:
-                      if tasks_remaining > 0:
-                          print(f"💤 Burst complete ({success_count}/{current_burst} success). Sleeping for {SLEEP_BETWEEN_BURSTS} seconds...", flush=True)
-                          await asyncio.sleep(SLEEP_BETWEEN_BURSTS)
-
-                  burst_num += 1
-
-              print("\n" + "-" * 80, flush=True)
-              print("✅ Load Test Protocol Finished.", flush=True)
+              print("\n--- Load Test Summary ---")
+              print(f"Total Requests Sent: {TOTAL_REQUESTS}")
+              print(f"Successful Requests (200 OK): {success_count}")
+              print(f"Failed Requests (Errors/Timeouts): {failed_count}")
+              
+              if TOTAL_REQUESTS > 0:
+                  success_percentage = (success_count / TOTAL_REQUESTS) * 100
+                  print(f"Success Rate: {success_percentage:.2f}%")
+              print("--------------------------\n")
 
           if __name__ == "__main__":
+              if os.name == "nt":
+                  asyncio.set_event_loop_policy(
+                      asyncio.WindowsSelectorEventLoopPolicy()
+                  )
+
               asyncio.run(main())
           EOF
-
-          python -u load_tester.py
